@@ -1,13 +1,30 @@
 import { Component } from '@angular/core';
 import { Platform, ToastController, NavController } from 'ionic-angular';
 import { StatusBar, Splashscreen } from 'ionic-native';
+import { Storage } from '@ionic/storage'
+import { CheckinProvider } from '../../providers/checkin-provider';
+import { HistoryPage } from '../history/history';
 declare var WifiWizard: any
 @Component({
   selector: 'page-home',
   templateUrl: 'home.html'
 })
 export class HomePage {
-
+  //loader css varible
+  displayLoader = "block";
+  loadingText = "Loading ...";
+  //check in varible
+  currentDate = "";
+  checkinData = { "checkInTime": 0, "checkOutTime": 0, "today": "" };
+  checkinStatus = { "checkedin": false, "checkedout": false }
+  checkinClass = "progress-primary";
+  checkoutClass = "progress-primary";
+  checkinProgress = 0;
+  checkoutProgress = 0;
+  checkinText = "<span>Not Yet!</span>";
+  checkoutText = "<span>Pending...</span>";
+  alertText = "";
+  showAlertText = false;
   // Custom tab varible
   private numTabs = 3;
   private currentTab = 1;
@@ -30,11 +47,13 @@ export class HomePage {
   private requestId; //id of requestAnimationFrame
   //End Custom tab varible
 
-  constructor(platform: Platform, public toastCtrl: ToastController, public navCtrl: NavController) {
-
+  constructor(platform: Platform, public toastCtrl: ToastController, public navCtrl: NavController, public storage: Storage, public checkinProvider: CheckinProvider) {
+    let date = new Date();
+    this.currentDate = date.getDate() + "_" + date.getMonth() + "_" + date.getFullYear();
     platform.ready().then(() => {
       StatusBar.styleDefault();
       Splashscreen.hide();
+      // this.getCheckinStatus();
     });
   }
   // Custom tab function
@@ -201,4 +220,159 @@ export class HomePage {
     toast.present();
   }
 
+  //Run first 
+  ionViewDidEnter() {
+    console.log("HomePage ionViewDidEnter")
+    this.refresh();
+  }
+  refresh() {
+    this.storage.ready().then(() => {
+      this.checkinProvider.localGetCheckinStatus().then((localData) => {
+        if (localData != null && this.currentDate == localData.today) {
+          //Exists data in local and data is up to date  
+          this.checkinData = localData;
+          if (this.checkinData.checkInTime > 0) {
+            this.showCheckinStatus(1);
+          }
+          console.log("Exists local data: ", localData);
+        } else {
+          console.log("Not exists local data");
+
+        }
+
+        this.checkinProvider.serverGetCheckinStatus(this.currentDate).then(
+          (data) => {
+            let body = JSON.parse(data._body);
+            if (body.code == 1) {
+              //No data in server
+              this.checkinData.checkInTime = 0;
+              this.checkinData.checkOutTime = 0;
+              this.checkinData.today = "";
+              this.storage.set("todayCheckedin", this.checkinData);
+              this.showCheckinStatus(4);
+            } else {
+              //Existing data in server
+              this.checkinData.checkInTime = body.checkInTime;
+              this.checkinData.checkOutTime = body.checkOutTime;
+              this.checkinData.today = this.currentDate;
+              if (body.checkInTime > 0) this.showCheckinStatus(1);
+              //store in to local
+              this.storage.set("todayCheckedin", this.checkinData);
+              console.log("Data update successfully", data);
+            }
+          }, (error) => {
+            this.showToast("Could not connect to server. Please check the internet. " + error, 5000);
+            console.log("Could not connect to server. Please check the internet. " + error);
+          }
+        )
+      })
+    })
+  }
+  showCheckinStatus(mode: number) {
+    switch (mode) {
+      case 1: {
+        //Checked in
+        this.checkinClass = "progress-primary";
+        this.checkinProgress = 100;
+        this.checkinText = "<span>Checked in <i class=\"fa fa-check-circle\"></i></span>";
+        return;
+      }
+      case 2: {
+        //Checking ...
+        this.checkinClass = "progress-secondary";
+        this.checkinText = "<span>Checking ...</span>";
+        return;
+      }
+      case 3: {
+        //Failed
+        this.checkinClass = "progress-danger";
+        this.checkinProgress = 100;
+        this.checkinText = "<span>Failed <i class=\"fa fa-exclamation-circle\"></i></span>";
+        return;
+      }
+      default: {
+        //Not yet
+        this.checkinClass = "progress-danger";
+        this.checkinProgress = 0;
+        this.checkinText = "<span>Not Yet!</span>";
+        return;
+      }
+    }
+  }
+  doCheckin() {
+    this.showCheckinStatus(2);
+    this.checkinProgress = 0;
+    let progressTimeout1 = setTimeout(() => { this.checkinProgress = 60 }, 2000);
+    let progressTimeout2 = setTimeout(() => { this.checkinProgress = 80 }, 5000);
+    WifiWizard.getCurrentSSID((e) => {
+      console.log("getCurrentSSID success");
+      console.log(e);
+      this.checkinProvider.serverCheckin(e).then((res) => {
+        clearTimeout(progressTimeout1);
+        clearTimeout(progressTimeout2);
+        let body = JSON.parse(res._body);
+        switch (body.code) {
+          case 1: {
+            //Checked in successfully
+            //Do same as case 2
+          }
+          case 2: {
+            //Already checked in
+            this.showCheckinStatus(1);
+            this.checkinData.checkInTime = body.checkInTime;
+            this.checkinData.today = body.today;
+            //Sotore data to local
+            this.storage.set("todayCheckedin", this.checkinData);
+            console.log("Checked in successfully");
+            console.log("Checkin progress", this.checkinProgress);
+            break;
+          }
+          case 3: {
+            //User does not belong company
+            this.showCheckinStatus(3);
+            this.alertText = "User does not belong company";
+            this.showAlertText = true;
+            console.log("User does not belong company");
+            break;
+          }
+          case 4: {
+            //Invalid macid
+            this.showCheckinStatus(3);
+            this.alertText = "You have to use company's wifi to checkin. Your company wifi name: " + body.validWifi;
+            this.showAlertText = true;
+            console.log("Invalid macid");
+            console.log("User macid: ", e);
+            console.log("Valid wifi: ", body.validWifi);
+            break;
+          }
+          default: {
+            console.log(body.code);
+            this.showCheckinStatus(4);
+            setTimeout(this.refresh, 2000);
+          }
+        }
+      }, (error) => {
+        console.log("Could not connect to server. Please check the internet. " + error);
+        this.alertText = "Could not connect to server. Please check the internet.";
+        this.showAlertText = true;
+        this.showCheckinStatus(3);
+        clearTimeout(progressTimeout1);
+        clearTimeout(progressTimeout2);
+        setTimeout(this.refresh, 2000);
+      })
+
+    }, (e) => {
+      console.log("getCurrentSSID Fail");
+      this.alertText = "Wifi is not enabled";
+      this.showAlertText = true;
+      this.showCheckinStatus(3);
+      clearTimeout(progressTimeout1);
+      clearTimeout(progressTimeout2);
+      this.refresh();
+    });
+  }
+
+  gotoCheckinHistory() {
+    this.navCtrl.push(HistoryPage);
+  }
 }
