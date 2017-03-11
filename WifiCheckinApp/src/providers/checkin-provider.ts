@@ -68,7 +68,20 @@ export class CheckinProvider {
       "company": this.company
     };
 
-    return this.http.post(this.domainName + this.apiPath + "getProduct", body)
+    return this.http.post(this.domainName + this.apiPath + "products", body)
+      .toPromise();
+  }
+
+  serverGetCheckinHistory(startTime: number, endTime: number): Promise<any> {
+    let body = {
+      "username": this.username,
+      "userid": this.userid,
+      "access_token": this.token,
+      "start_time": startTime,
+      "end_time": endTime
+    };
+
+    return this.http.post(this.domainName + this.apiPath + "history", body)
       .toPromise();
   }
 
